@@ -15,12 +15,16 @@ printf 'n\n' | nordvpn set analytics off > /dev/null 2>&1
 # Make sure the token isn't destroyed on logout
 nordvpn logout --persist-token > /dev/null
 
-# Login with token
+# Login with token (reuse the saved login if there is one)
 if [[ -n ${NORDVPN_TOKEN} ]]; then
-  nordvpn login --token "${NORDVPN_TOKEN}" || {
-    echo "Invalid token."
-    exit 1
-  }
+  if ! LOGIN_OUT=$(nordvpn login --token "${NORDVPN_TOKEN}" 2>&1); then
+    if grep -qi "already logged in" <<< "${LOGIN_OUT}"; then
+      echo "Already logged in, reusing saved login."
+    else
+      echo "Login failed: ${LOGIN_OUT}"
+      exit 1
+    fi
+  fi
 else
   echo "No token set."
   exit 1

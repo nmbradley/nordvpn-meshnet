@@ -30,4 +30,4 @@ COPY /fs /
 
 # Make sure NordVPN service is running before logging in and launching Meshnet
 ENV S6_CMD_WAIT_FOR_SERVICES=1
-CMD nordvpn_login && meshnet_config && meshnet_watch
+CMD ["/bin/sh", "-c", "nordvpn_login && meshnet_config && meshnet_watch"]

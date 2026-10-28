@@ -74,10 +74,10 @@ jobs:
     if: needs.check.outputs.build == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build test image (amd64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -111,13 +111,48 @@ jobs:
 
           docker exec smoke nordvpn account | grep -q 'Email address' \
             || { echo 'Login failed'; docker logs smoke; exit 1; }
-          docker exec smoke nordvpn meshnet peer list \
+          docker exec smoke nordvpn meshnet peer list >/dev/null 2>&1 \
             || { echo 'Meshnet peer list failed'; docker logs smoke; exit 1; }
           echo "Smoke test passed: logged in and joined Meshnet."
 
+      - name: Restart with saved login (repeated logins)
+        run: |
+          set -euo pipefail
+          # A real server keeps /var/lib/nordvpn between restarts, so every
+          # restart starts with a saved login. `docker restart` keeps the
+          # container's filesystem, which reproduces that. Do it twice so the
+          # login script is proven to cope with a saved login repeatedly.
+          for round in 1 2; do
+            echo "Restart ${round}: starting again with a saved login..."
+            docker restart smoke
+
+            ok=false
+            for i in $(seq 1 30); do
+              if [ "$(docker inspect -f '{{.State.Running}}' smoke)" != "true" ]; then
+                echo "Container exited after restart ${round}"; docker logs --tail 50 smoke; exit 1
+              fi
+              if docker exec smoke nordvpn meshnet peer list >/dev/null 2>&1; then
+                ok=true; break
+              fi
+              sleep 5
+            done
+            [ "$ok" = "true" ] \
+              || { echo "Meshnet did not come back after restart ${round}"; docker logs --tail 50 smoke; exit 1; }
+
+            # The daemon can answer for a moment before a failing login script
+            # exits, so make sure the container is still up a little later.
+            sleep 15
+            [ "$(docker inspect -f '{{.State.Running}}' smoke)" = "true" ] \
+              || { echo "Container stopped after restart ${round}"; docker logs --tail 50 smoke; exit 1; }
+
+            docker exec smoke nordvpn account | grep -q 'Email address' \
+              || { echo "Not logged in after restart ${round}"; docker logs --tail 50 smoke; exit 1; }
+          done
+          echo "Restart check passed: the saved login survives repeated restarts."
+
       - name: Deregister test device
         if: always()
-        run: docker exec smoke nordvpn logout --persist-token || true
+        run: docker exec smoke nordvpn logout || true
 
   build-push:
     runs-on: ubuntu-latest
@@ -129,17 +164,17 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Docker Meta
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -147,14 +182,14 @@ jobs:
             type=raw,value=latest
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Docker Build and Push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
